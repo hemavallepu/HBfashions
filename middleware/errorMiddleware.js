@@ -22,6 +22,10 @@ export const errorHandler = (err, req, res, next) => {
     status = 401;
     message = "Session expired, please login again";
   }
+  if (err.name === "MulterError") {
+    status = 400;
+    message = err.code === "LIMIT_FILE_SIZE" ? "File is too large (max 20 MB)" : err.message;
+  }
 
   res.status(status).json({ success: false, message });
 };

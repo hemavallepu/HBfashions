@@ -1,12 +1,41 @@
 import mongoose from "mongoose";
 import Product from "../models/Product.js";
+import AppError from "../utils/AppError.js";
+import { uploadToCloudinary, deleteFromCloudinary } from "../utils/cloudinary.js";
 
 const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// POST /api/products  (admin only later)
+const uploadFiles = async (files = {}) => {
+  const images = await Promise.all(
+    (files.images || []).map(async (file) => {
+      const result = await uploadToCloudinary(file.buffer, { resource_type: "image" });
+      return { public_id: result.public_id, url: result.secure_url };
+    })
+  );
+
+  let video;
+  if (files.video?.[0]) {
+    const result = await uploadToCloudinary(files.video[0].buffer, { resource_type: "video" });
+    video = { public_id: result.public_id, url: result.secure_url };
+  }
+  return { images, video };
+};
+
+const removeFiles = async (images = [], video) => {
+  await Promise.all(images.map((img) => deleteFromCloudinary(img.public_id)));
+  if (video?.public_id) await deleteFromCloudinary(video.public_id, "video");
+};
+
+// POST /api/products  (admin only) - multipart/form-data
 export const createProduct = async (req, res) => {
-  const product = await Product.create(req.body);
-  res.status(201).json({ success: true, product });
+  const { images, video } = await uploadFiles(req.files);
+  try {
+    const product = await Product.create({ ...req.body, images, video });
+    res.status(201).json({ success: true, product });
+  } catch (error) {
+    await removeFiles(images, video); // don't leave orphan files in Cloudinary
+    throw error;
+  }
 };
 
 // GET /api/products?keyword=&fabric=&occasion=&color=&minPrice=&maxPrice=&sort=&page=&limit=
@@ -21,7 +50,6 @@ export const getProducts = async (req, res) => {
     const regex = new RegExp(escapeRegex(keyword), "i");
     filter.$or = [{ name: regex }, { description: regex }];
   }
-  // comma-separated allowed: ?fabric=Cotton,Linen
   if (fabric) filter.fabric = { $in: fabric.split(",") };
   if (occasion) filter.occasion = { $in: occasion.split(",") };
   if (color) filter.color = new RegExp(`^${escapeRegex(color)}$`, "i");
@@ -70,29 +98,58 @@ export const getProductById = async (req, res) => {
   res.json({ success: true, product });
 };
 
-// PUT /api/products/:id  (admin only later)
+// PUT /api/products/:id  (admin only)
 export const updateProduct = async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) {
     return res.status(400).json({ success: false, message: "Invalid product id" });
   }
-  const product = await Product.findByIdAndUpdate(req.params.id, req.body, {
-    new: true,
-    runValidators: true,
-  });
+  const product = await Product.findById(req.params.id);
   if (!product) {
     return res.status(404).json({ success: false, message: "Product not found" });
   }
+
+  const fields = { ...req.body };
+  delete fields.images; // files are handled separately below
+  delete fields.video;
+
+  const { images, video } = await uploadFiles(req.files);
+
+  product.set(fields);
+  if (images.length) product.images.push(...images);
+  if (video) {
+    if (product.video?.public_id) await deleteFromCloudinary(product.video.public_id, "video");
+    product.video = video;
+  }
+  await product.save();
+
   res.json({ success: true, product });
 };
 
-// DELETE /api/products/:id  (admin only later)
+// DELETE /api/products/:id  (admin only)
 export const deleteProduct = async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) {
     return res.status(400).json({ success: false, message: "Invalid product id" });
   }
-  const product = await Product.findByIdAndDelete(req.params.id);
+  const product = await Product.findById(req.params.id);
   if (!product) {
     return res.status(404).json({ success: false, message: "Product not found" });
   }
+  await removeFiles(product.images, product.video);
+  await product.deleteOne();
   res.json({ success: true, message: "Product deleted" });
+};
+
+// DELETE /api/products/:id/images/:imageId  (admin only)
+export const deleteProductImage = async (req, res) => {
+  const product = await Product.findById(req.params.id);
+  if (!product) throw new AppError("Product not found", 404);
+
+  const image = product.images.id(req.params.imageId);
+  if (!image) throw new AppError("Image not found", 404);
+
+  await deleteFromCloudinary(image.public_id);
+  product.images.pull(image._id);
+  await product.save();
+
+  res.json({ success: true, product });
 };

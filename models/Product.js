@@ -24,7 +24,7 @@ const productSchema = new mongoose.Schema(
         url: { type: String, required: true },
       },
     ],
-    video: { type: String },
+    video: { public_id: { type: String }, url: { type: String } },
     stock: { type: Number, required: true, min: 0, default: 0 },
     deliveryDays: { type: Number, default: 5 },
     ratings: { type: Number, default: 0 },
