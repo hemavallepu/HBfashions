@@ -3,6 +3,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import authRoutes from "./routes/authRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 import { errorHandler } from "./middleware/errorMiddleware.js";
 
 
@@ -18,6 +19,7 @@ app.get("/api/health", (req, res) => {
 app.use("/api/auth", authRoutes);       
 app.use("/api/products", productRoutes);
 app.use("/api/products", productRoutes);
+app.use("/api/admin", adminRoutes);
 
 app.use(errorHandler); 
 
